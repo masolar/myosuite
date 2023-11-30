@@ -13,8 +13,7 @@ example isn't included in the sample space
 from itertools import product
 from pathlib import Path
 import pandas as pd
-from typing import Set, Iterable
-from tqdm import tqdm
+from typing import Set, Iterable, Dict, Tuple, List
 
 
 class GoogleFingerspellingLoader:
@@ -41,6 +40,9 @@ class GoogleFingerspellingLoader:
 
         self.possible_chars = self.get_char_product(
             self.char_subset, self.get_4_grams(list(self.metadata['phrase'].astype(str))))
+
+        self.valid_filenames, self.index_to_filename, self.index_to_seq = self.get_valid_filenames_per_ngram(
+            self.metadata, self.possible_chars)
 
     @staticmethod
     def get_4_grams(corpus: Iterable[str]):
@@ -85,3 +87,57 @@ class GoogleFingerspellingLoader:
 
         # Remove n-grams that are not present in the dataset
         return possible_chars.intersection(dictionary)
+
+    @staticmethod
+    def get_valid_filenames_per_ngram(metadata: pd.DataFrame, possible_chars: Set[str]):
+        """
+        Returns the filenames, sequence numbers, and start and end positions, and number of signs
+        in the sequence for a given n-gram. Also returns two lookup tables for the
+        filename and sequence number, to save a bit of memory.
+
+        Args:
+            metadata: The metadata from the dataset
+            possible_chars: The possible 4-grams that are seen in the data and
+                            match the constraints given
+        """
+        index_to_filename_count = 0
+        index_to_filename: Dict[int, str] = {}
+        filename_to_index: Dict[str, int] = {}
+        index_to_sequence_count = 0
+        index_to_sequence: Dict[int, str] = {}
+        sequence_to_index: Dict[str, int] = {}
+
+        result_dict: Dict[str, List[Tuple[int, int, int, int, int]]] = {}
+
+        # Looping through a dataframe isn't great, but the data should be small enough that it's not an issue
+        for _, (df_path, _, seq_id, _, phrase) in metadata.iterrows():
+
+            possible_grams = [phrase[i:i+4]
+                              for i in range(len(phrase) - 3) if len(phrase) >= 4]
+
+            for i, possible_gram in enumerate(possible_grams):
+                start_pos = i
+                end_pos = i + 4
+
+                # This represents all the ways this sequence could be interpreted
+                checklist = [possible_gram, '\0' + possible_gram[1:],
+                             possible_gram[:3] + '\0', '\0' + possible_gram[1:3] + '\0']
+                for check in checklist:
+                    if check in possible_chars:
+                        if df_path not in filename_to_index:
+                            index_to_filename[index_to_filename_count] = df_path
+                            filename_to_index[df_path] = index_to_filename_count
+                            index_to_filename_count += 1
+                        if seq_id not in sequence_to_index:
+                            index_to_sequence[index_to_sequence_count] = seq_id
+                            sequence_to_index[seq_id] = index_to_sequence_count
+                            index_to_sequence_count += 1
+
+                        if check not in result_dict:
+                            result_dict[check] = [
+                                (filename_to_index[df_path], sequence_to_index[seq_id], start_pos, end_pos, len(phrase))]
+                        else:
+                            result_dict[check].append(
+                                (filename_to_index[df_path], sequence_to_index[seq_id], start_pos, end_pos, len(phrase)))
+
+        return result_dict, index_to_filename, index_to_sequence
